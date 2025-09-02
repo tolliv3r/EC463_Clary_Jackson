@@ -1,8 +1,5 @@
-# 01-Individual Repo
-Template for individual student repo
-
-<img src="./images/thisisme.png" width="20%">
-<p> This is me </p>
+# 01-Individual Repo for Jackson Clary
+![red Small](https://github.com/user-attachments/assets/28c4cff6-7796-4284-a0ea-bc47de82d50f)
 
 ## Individual links
 - [Log book]()
