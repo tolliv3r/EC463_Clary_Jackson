@@ -169,4 +169,3 @@ camera_control photo
 ## License
 
 This application uses the Insta360 Camera SDK. Please refer to Insta360's SDK license terms.
-
