@@ -17,7 +17,7 @@
 #define ACCESS_FUNC access
 #endif
 
-/** Tee streambuf: forwards every character to two streambufs (e.g. terminal + log file). */
+// Tee streambuf: forwards every character to two streambufs (terminal + log file)
 class TeeStreambuf : public std::streambuf {
 public:
     TeeStreambuf(std::streambuf* primary, std::streambuf* log)
