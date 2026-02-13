@@ -3,6 +3,7 @@
 #include <string>
 #include <chrono>
 #include <ctime>
+#include <cstdlib>
 #include <camera/camera.h>
 #include <camera/device_discovery.h>
 #include <camera/photography_settings.h>
@@ -14,6 +15,8 @@
 #else
 #include <unistd.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <cerrno>
 #define ACCESS_FUNC access
 #endif
 
@@ -295,7 +298,12 @@ void printUsage(const char* program_name) {
 
 int main(int argc, char* argv[]) {
     std::ofstream log_file;
-    const std::string log_path = "camera_control_" + getCurrentTime() + ".log";
+    const char* home = std::getenv("HOME");
+    const std::string log_dir = home ? std::string(home) + "/log" : "log";
+#ifndef _WIN32
+    mkdir(log_dir.c_str(), 0755);
+#endif
+    const std::string log_path = log_dir + "/camera_control_" + getCurrentTime() + ".log";
     log_file.open(log_path, std::ios::out | std::ios::trunc);
 
     std::streambuf* orig_cout = std::cout.rdbuf();
