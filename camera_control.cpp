@@ -2,6 +2,7 @@
 #include <fstream>
 #include <string>
 #include <chrono>
+#include <thread>
 #include <ctime>
 #include <cstdlib>
 #include <camera/camera.h>
@@ -95,7 +96,7 @@ public:
     bool discoverAndConnect() {
         std::cout << "Discovering Insta360 cameras..." << std::endl;
         
-        ins_camera::SetLogLevel(ins_camera::LogLevel::ERR);
+        ins_camera::SetLogLevel(ins_camera::LogLevel::FATAL);
         ins_camera::DeviceDiscovery discovery;
         auto device_list = discovery.GetAvailableDevices();
         
@@ -140,6 +141,10 @@ public:
 #endif
         camera_->SyncLocalTimeToCamera(time_seconds);
 
+        // X5 (and some other models) need longer than default 10s to respond to TakePhoto()
+        // X5 at 72MP especially needs extra time; 60s accommodates mode switch + capture + response
+        camera_->SetTimeout(60000);
+
         is_connected_ = true;
         std::cout << "Successfully connected to camera!" << std::endl;
         
@@ -173,6 +178,10 @@ public:
         if (!ret) {
             std::cerr << "Warning: Failed to set photo mode, continuing anyway..." << std::endl;
         }
+
+        // X5 needs time to switch from video to photo mode before TakePhoto
+        std::cout << "Waiting for camera to switch to photo mode..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(3));
 
         std::cout << "Taking photo..." << std::endl;
         const auto url = camera_->TakePhoto();
