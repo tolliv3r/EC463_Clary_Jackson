@@ -31,7 +31,9 @@ fi
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SDK_DIR="$SCRIPT_DIR/CameraSDK-20250418_161512-2.0.2-gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu"
+# Project root is the parent of the helper directory
+ROOT_DIR="$( cd "$SCRIPT_DIR/.." && pwd )"
+SDK_DIR="$ROOT_DIR/CameraSDK-20250418_161512-2.0.2-gcc-arm-9.2-2019.12-x86_64-aarch64-none-linux-gnu"
 LIB_DIR="$SDK_DIR/lib"
 
 # Check if SDK is extracted
@@ -48,7 +50,7 @@ echo "✓ SDK directory found"
 # Build the application
 echo ""
 echo "Building application..."
-cd "$SCRIPT_DIR"
+cd "$ROOT_DIR"
 make clean
 make
 

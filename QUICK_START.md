@@ -109,3 +109,9 @@ sudo ./camera_control photo
 > quit
 ```
 
+### SSH to Pi
+
+```
+ssh dev@192.168.1.15
+polar
+```
