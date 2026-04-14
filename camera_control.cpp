@@ -241,6 +241,108 @@ public:
         return true;
     }
 
+    bool startRecording() {
+        if (!is_connected_ || !camera_) {
+            std::cerr << "Error: Camera not connected." << std::endl;
+            return false;
+        }
+
+        if (!camera_->IsConnected()) {
+            std::cerr << "Error: Camera connection lost." << std::endl;
+            is_connected_ = false;
+            return false;
+        }
+
+        std::cout << "Switching camera to normal video mode..." << std::endl;
+        bool mode_set = camera_->SetVideoSubMode(ins_camera::SubVideoMode::VIDEO_NORMAL);
+        if (!mode_set) {
+            std::cerr << "Error: Failed to switch to normal video mode." << std::endl;
+            return false;
+        }
+
+        std::cout << "Starting recording..." << std::endl;
+        bool ret = camera_->StartRecording();
+        if (!ret) {
+            std::cerr << "Error: Failed to start recording." << std::endl;
+            return false;
+        }
+
+        std::cout << "Recording started." << std::endl;
+        return true;
+    }
+
+    bool stopRecording(const std::string& save_directory = "./") {
+        if (!is_connected_ || !camera_) {
+            std::cerr << "Error: Camera not connected." << std::endl;
+            return false;
+        }
+
+        if (!camera_->IsConnected()) {
+            std::cerr << "Error: Camera connection lost." << std::endl;
+            is_connected_ = false;
+            return false;
+        }
+
+        std::cout << "Stopping recording..." << std::endl;
+        auto url = camera_->StopRecording();
+        if (url.Empty()) {
+            std::cerr << "Error: Failed to stop recording or no recording in progress." << std::endl;
+            return false;
+        }
+
+        if (!url.IsSingleOrigin()) {
+            std::cerr << "Error: Recording stopped, but returned URL is not a single origin file." << std::endl;
+            return false;
+        }
+
+        const std::string video_url = url.GetSingleOrigin();
+        std::cout << "Recording stopped. Video URL: " << video_url << std::endl;
+
+        if (!save_directory.empty()) {
+            std::string save_path = save_directory;
+            if (save_path.back() != '/' && save_path.back() != '\\') {
+                save_path += "/";
+            }
+
+            if (!fileExists(save_path)) {
+                std::cerr << "Error: Save directory does not exist: " << save_path << std::endl;
+                std::cerr << "Video URL on camera: " << video_url << std::endl;
+                return false;
+            }
+
+            std::string file_name = getFileName(video_url);
+            if (file_name.empty()) {
+                file_name = "video_" + getCurrentTime() + ".mp4";
+            }
+
+            std::string full_path = save_path + file_name;
+            std::cout << "Downloading video to: " << full_path << std::endl;
+
+            int64_t last_progress = -1;
+            bool download_success = camera_->DownloadCameraFile(video_url, full_path,
+                [&](int64_t current, int64_t total_size) {
+                    int64_t progress = total_size > 0 ? (current * 100 / total_size) : 0;
+                    if (progress != last_progress) {
+                        std::cout << "\rDownload progress: " << progress << "%" << std::flush;
+                        last_progress = progress;
+                    }
+                });
+
+            std::cout << std::endl;
+
+            if (download_success) {
+                std::cout << "Video successfully downloaded to: " << full_path << std::endl;
+                return true;
+            } else {
+                std::cerr << "Error: Failed to download video." << std::endl;
+                std::cerr << "Video URL on camera: " << video_url << std::endl;
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     bool shutdownCamera() {
         if (!is_connected_ || !camera_) {
             std::cerr << "Error: Camera not connected." << std::endl;
@@ -290,10 +392,15 @@ public:
 void printUsage(const char* program_name) {
     std::cout << "Insta360 Camera Control for Raspberry Pi" << std::endl;
     std::cout << "Usage: " << program_name << " <command> [options]" << std::endl;
+    std::cout << "       " << program_name << " record <start|stop>" << std::endl;
     std::cout << std::endl;
     std::cout << "Commands:" << std::endl;
     std::cout << "  connect              - Connect to camera" << std::endl;
     std::cout << "  photo [save_dir]    - Take a photo (optionally save to directory)" << std::endl;
+    std::cout << "  record start        - Start video recording" << std::endl;
+    std::cout << "  record stop [dir]   - Stop video recording and download to directory" << std::endl;
+    std::cout << "  record-start        - Start video recording (alias)" << std::endl;
+    std::cout << "  record-stop [dir]   - Stop video recording and download (alias)" << std::endl;
     std::cout << "  shutdown             - Power off the camera" << std::endl;
     std::cout << "  battery              - Get battery status" << std::endl;
     std::cout << "  interactive          - Interactive mode" << std::endl;
@@ -301,6 +408,10 @@ void printUsage(const char* program_name) {
     std::cout << "Examples:" << std::endl;
     std::cout << "  " << program_name << " photo                    # Take photo" << std::endl;
     std::cout << "  " << program_name << " photo ./photos          # Take photo and save to ./photos" << std::endl;
+    std::cout << "  " << program_name << " record start            # Start recording" << std::endl;
+    std::cout << "  " << program_name << " record stop ./videos    # Stop recording and save to ./videos" << std::endl;
+    std::cout << "  " << program_name << " record-start            # Start recording (alias)" << std::endl;
+    std::cout << "  " << program_name << " record-stop ./videos    # Stop recording and save (alias)" << std::endl;
     std::cout << "  " << program_name << " shutdown                # Power off camera" << std::endl;
     std::cout << "  " << program_name << " interactive             # Interactive mode" << std::endl;
 }
@@ -349,7 +460,7 @@ int main(int argc, char* argv[]) {
         if (!controller.discoverAndConnect()) {
             return 1;
         }
-        std::cout << "Camera connected. Use 'photo', 'shutdown', or 'battery' commands." << std::endl;
+        std::cout << "Camera connected. Use 'photo', 'record', 'shutdown', or 'battery' commands." << std::endl;
         return 0;
     }
 
@@ -364,6 +475,43 @@ int main(int argc, char* argv[]) {
         controller.disconnect();
         return success ? 0 : 1;
     }
+    else if (command == "record-start") {
+        bool success = controller.startRecording();
+        controller.disconnect();
+        return success ? 0 : 1;
+    }
+    else if (command == "record-stop") {
+        std::string save_dir = (argc > 2) ? argv[2] : "./";
+        bool success = controller.stopRecording(save_dir);
+        controller.disconnect();
+        return success ? 0 : 1;
+    }
+    else if (command == "record") {
+        if (argc < 3) {
+            std::cerr << "Error: Missing record action. Use 'record start' or 'record stop'." << std::endl;
+            printUsage(argv[0]);
+            controller.disconnect();
+            return 1;
+        }
+
+        std::string record_action = argv[2];
+        if (record_action == "start") {
+            bool success = controller.startRecording();
+            controller.disconnect();
+            return success ? 0 : 1;
+        } else if (record_action == "stop") {
+            std::string save_dir = (argc > 3) ? argv[3] : "./";
+            bool success = controller.stopRecording(save_dir);
+            controller.disconnect();
+            return success ? 0 : 1;
+        } else {
+            std::cerr << "Error: Unknown record action: " << record_action << std::endl;
+            std::cerr << "Use 'record start' or 'record stop'." << std::endl;
+            printUsage(argv[0]);
+            controller.disconnect();
+            return 1;
+        }
+    }
     else if (command == "shutdown") {
         bool success = controller.shutdownCamera();
         controller.disconnect();
@@ -376,7 +524,7 @@ int main(int argc, char* argv[]) {
     }
     else if (command == "interactive") {
         std::cout << "\n=== Interactive Mode ===" << std::endl;
-        std::cout << "Commands: photo [dir], shutdown, battery, quit" << std::endl;
+        std::cout << "Commands: photo [dir], record start, record stop [dir], shutdown, battery, quit" << std::endl;
         
         std::string line;
         while (true) {
@@ -393,6 +541,16 @@ int main(int argc, char* argv[]) {
                 std::string dir = line.length() > 6 ? line.substr(6) : "./";
                 controller.takePhoto(dir);
             }
+            else if (line == "record start") {
+                controller.startRecording();
+            }
+            else if (line == "record stop") {
+                controller.stopRecording("./");
+            }
+            else if (line.substr(0, 12) == "record stop ") {
+                std::string dir = line.length() > 12 ? line.substr(12) : "./";
+                controller.stopRecording(dir);
+            }
             else if (line == "shutdown") {
                 if (controller.shutdownCamera()) {
                     break;
@@ -405,7 +563,7 @@ int main(int argc, char* argv[]) {
                 continue;
             }
             else {
-                std::cout << "Unknown command. Try: photo, shutdown, battery, quit" << std::endl;
+                std::cout << "Unknown command. Try: photo, record start, record stop [dir], shutdown, battery, quit" << std::endl;
             }
             
             // Check if still connected
