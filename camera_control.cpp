@@ -21,6 +21,19 @@
 #define ACCESS_FUNC access
 #endif
 
+// #region agent log
+static void debugLog(const char* hyp, const char* loc, const char* msg, const std::string& data = "") {
+    FILE* f = fopen("/tmp/debug-1daab7.log", "a");
+    if (f) {
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        fprintf(f, "{\"sessionId\":\"1daab7\",\"hypothesisId\":\"%s\",\"location\":\"%s\",\"message\":\"%s\",\"data\":\"%s\",\"timestamp\":%lld}\n",
+                hyp, loc, msg, data.c_str(), (long long)ms);
+        fclose(f);
+    }
+}
+// #endregion
+
 // Tee streambuf: forwards every character to two streambufs (terminal + log file)
 class TeeStreambuf : public std::streambuf {
 public:
@@ -85,9 +98,66 @@ class CameraController {
 private:
     std::shared_ptr<ins_camera::Camera> camera_;
     bool is_connected_;
+    std::chrono::steady_clock::time_point last_record_stop_time_;
+    bool has_recent_record_stop_;
+
+    static const char* cardStateToString(ins_camera::CardState state) {
+        switch (state) {
+            case ins_camera::STOR_CS_PASS:
+                return "PASS";
+            case ins_camera::STOR_CS_NOCARD:
+                return "NO_CARD";
+            case ins_camera::STOR_CS_NOSPACE:
+                return "NO_SPACE";
+            case ins_camera::STOR_CS_INVALID_FORMAT:
+                return "INVALID_FORMAT";
+            case ins_camera::STOR_CS_WPCARD:
+                return "WRITE_PROTECTED";
+            case ins_camera::STOR_CS_OTHER_ERROR:
+                return "OTHER_ERROR";
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    static std::string formatBytes(uint64_t bytes) {
+        constexpr uint64_t kGiB = 1024ULL * 1024ULL * 1024ULL;
+        constexpr uint64_t kMiB = 1024ULL * 1024ULL;
+        if (bytes >= kGiB) {
+            return std::to_string(bytes / kGiB) + " GiB";
+        }
+        return std::to_string(bytes / kMiB) + " MiB";
+    }
+
+    bool preflightStorageForPhoto() {
+        ins_camera::StorageStatus status{};
+        if (!camera_->GetStorageState(status)) {
+            std::cerr << "Error: Failed to read camera storage state before photo capture." << std::endl;
+            return false;
+        }
+
+        std::cout << "Storage state before photo: " << cardStateToString(status.state)
+                  << " (free=" << formatBytes(status.free_space)
+                  << ", total=" << formatBytes(status.total_space) << ")" << std::endl;
+
+        if (status.state != ins_camera::STOR_CS_PASS) {
+            std::cerr << "Error: Storage is not ready for photo capture (state="
+                      << cardStateToString(status.state) << ")." << std::endl;
+            return false;
+        }
+
+        constexpr uint64_t kMinimumFreeBytes = 50ULL * 1024ULL * 1024ULL; // 50 MiB safety floor
+        if (status.free_space < kMinimumFreeBytes) {
+            std::cerr << "Error: Insufficient free storage for reliable photo capture. "
+                      << "Need at least " << formatBytes(kMinimumFreeBytes) << "." << std::endl;
+            return false;
+        }
+
+        return true;
+    }
 
 public:
-    CameraController() : is_connected_(false) {}
+    CameraController() : is_connected_(false), has_recent_record_stop_(false) {}
 
     ~CameraController() {
         disconnect();
@@ -147,6 +217,13 @@ public:
 
         is_connected_ = true;
         std::cout << "Successfully connected to camera!" << std::endl;
+        // #region agent log
+        debugLog("H5", "discoverAndConnect:connected", "Camera connected, checking initial state",
+                 "isConnected=" + std::to_string(camera_->IsConnected()));
+        bool initBusy = camera_->CaptureCurrentStatus();
+        debugLog("H5", "discoverAndConnect:initialStatus", "Initial CaptureCurrentStatus",
+                 "busy=" + std::to_string(initBusy));
+        // #endregion
         
         discovery.FreeDeviceDescriptors(device_list);
         return true;
@@ -173,60 +250,97 @@ public:
             return false;
         }
 
+        // #region agent log
+        debugLog("H6", "takePhoto:SetVideoSubMode_before", "Resetting video pipeline before photo mode switch");
+        // #endregion
+        std::cout << "Resetting camera mode via video sub-mode..." << std::endl;
+        bool video_reset = camera_->SetVideoSubMode(ins_camera::SubVideoMode::VIDEO_NORMAL);
+        // #region agent log
+        debugLog("H6", "takePhoto:SetVideoSubMode_after", "SetVideoSubMode returned", "result=" + std::to_string(video_reset));
+        // #endregion
+        if (!video_reset) {
+            std::cerr << "Warning: Video mode reset failed, proceeding anyway." << std::endl;
+        }
+
         constexpr int kPhotoModeAttempts = 3;
         bool mode_set = false;
         for (int attempt = 1; attempt <= kPhotoModeAttempts; ++attempt) {
             std::cout << "Setting photo mode (attempt " << attempt << "/" << kPhotoModeAttempts << ")..." << std::endl;
+            // #region agent log
+            debugLog("H6", "takePhoto:SetPhotoSubMode_before", "About to call SetPhotoSubMode", "attempt=" + std::to_string(attempt));
+            // #endregion
             mode_set = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
+            // #region agent log
+            debugLog("H6", "takePhoto:SetPhotoSubMode_after", "SetPhotoSubMode returned", "result=" + std::to_string(mode_set));
+            // #endregion
             if (mode_set) {
                 break;
             }
             std::cerr << "Warning: Failed to set photo mode on attempt " << attempt << "." << std::endl;
             if (attempt < kPhotoModeAttempts) {
-                std::cout << "Retrying photo mode setup after short delay..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
         }
 
         if (!mode_set) {
             std::cerr << "Error: Unable to switch camera to single photo mode." << std::endl;
-            std::cerr << "Hint: Ensure the camera is idle (not recording) and try again." << std::endl;
             return false;
         }
 
-        constexpr int kReadyPollAttempts = 10;
-        bool camera_busy = false;
-        for (int poll = 1; poll <= kReadyPollAttempts; ++poll) {
-            camera_busy = camera_->CaptureCurrentStatus();
-            if (!camera_busy) {
+        if (!preflightStorageForPhoto()) {
+            return false;
+        }
+
+        constexpr int kTakePhotoAttempts = 3;
+        std::string photo_url;
+        bool photo_captured = false;
+        for (int attempt = 1; attempt <= kTakePhotoAttempts; ++attempt) {
+            std::cout << "Taking photo (attempt " << attempt << "/" << kTakePhotoAttempts
+                      << ")..." << std::endl;
+            // #region agent log
+            debugLog("H7", "takePhoto:TakePhoto_before", "About to call TakePhoto()", "attempt=" + std::to_string(attempt));
+            // #endregion
+            const auto url = camera_->TakePhoto();
+            // #region agent log
+            debugLog("H7", "takePhoto:TakePhoto_after", "TakePhoto() returned", "empty=" + std::to_string(url.Empty()) + ",singleOrigin=" + std::to_string(url.IsSingleOrigin()));
+            // #endregion
+            std::cout << "Capture command returned from SDK." << std::endl;
+
+            if (!url.Empty() && url.IsSingleOrigin()) {
+                photo_url = url.GetSingleOrigin();
+                photo_captured = true;
                 break;
             }
-            std::cout << "Camera is busy (" << poll << "/" << kReadyPollAttempts
-                      << "); waiting before capture..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            std::cerr << "Warning: Photo attempt " << attempt
+                      << " failed (empty or invalid media URL)." << std::endl;
+            if (attempt < kTakePhotoAttempts) {
+                std::cout << "Re-applying photo mode before retry..." << std::endl;
+                // #region agent log
+                debugLog("H7", "takePhoto:retry_before", "Re-applying modes before retry", "attempt=" + std::to_string(attempt));
+                // #endregion
+                camera_->SetVideoSubMode(ins_camera::SubVideoMode::VIDEO_NORMAL);
+                bool reapply = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
+                // #region agent log
+                debugLog("H7", "takePhoto:retry_after", "Re-apply returned", "result=" + std::to_string(reapply));
+                // #endregion
+                if (!reapply) {
+                    std::cerr << "Warning: Failed to re-apply photo mode before retry." << std::endl;
+                }
+                const int backoff_seconds = attempt * 2;
+                std::cout << "Waiting " << backoff_seconds
+                          << "s before retrying photo capture..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(backoff_seconds));
+            }
         }
 
-        if (camera_busy) {
-            std::cerr << "Error: Camera remained busy after waiting for photo readiness." << std::endl;
-            std::cerr << "Hint: Stop any active capture on the camera and retry." << std::endl;
-            return false;
-        }
-
-        // X5 may need extra settling time after mode transition before TakePhoto.
-        std::cout << "Photo mode ready. Waiting briefly before capture..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(2));
-
-        std::cout << "Taking photo... (this may take up to the SDK timeout)" << std::endl;
-        const auto url = camera_->TakePhoto();
-        std::cout << "Capture command returned from SDK." << std::endl;
-        
-        if (url.Empty() || !url.IsSingleOrigin()) {
-            std::cerr << "Error: Failed to take photo (empty or invalid media URL)." << std::endl;
+        if (!photo_captured) {
+            std::cerr << "Error: Failed to take photo after retries." << std::endl;
             std::cerr << "Hint: If this repeats on X5, wait for camera to become idle and retry." << std::endl;
             return false;
         }
 
-        const std::string photo_url = url.GetSingleOrigin();
+        has_recent_record_stop_ = false;
         std::cout << "Photo captured! URL: " << photo_url << std::endl;
 
         // Download the photo if save directory is provided
@@ -319,7 +433,13 @@ public:
         }
 
         std::cout << "Stopping recording..." << std::endl;
+        // #region agent log
+        debugLog("H5", "stopRecording:StopRecording_before", "About to call StopRecording()");
+        // #endregion
         auto url = camera_->StopRecording();
+        // #region agent log
+        debugLog("H5", "stopRecording:StopRecording_after", "StopRecording returned", "empty=" + std::to_string(url.Empty()));
+        // #endregion
         if (url.Empty()) {
             std::cerr << "Error: Failed to stop recording or no recording in progress." << std::endl;
             return false;
@@ -332,6 +452,9 @@ public:
 
         const std::string video_url = url.GetSingleOrigin();
         std::cout << "Recording stopped. Video URL: " << video_url << std::endl;
+        last_record_stop_time_ = std::chrono::steady_clock::now();
+        has_recent_record_stop_ = true;
+        std::cout << "Recorded stop timestamp captured; next photo will apply post-record readiness checks." << std::endl;
 
         if (!save_directory.empty()) {
             std::string save_path = save_directory;
@@ -443,8 +566,6 @@ void printUsage(const char* program_name) {
     std::cout << "Examples:" << std::endl;
     std::cout << "  " << program_name << " photo                    # Take photo" << std::endl;
     std::cout << "  " << program_name << " photo ./photos          # Take photo and save to ./photos" << std::endl;
-    std::cout << "  " << program_name << " record start            # Start recording" << std::endl;
-    std::cout << "  " << program_name << " record stop ./videos    # Stop recording and save to ./videos" << std::endl;
     std::cout << "  " << program_name << " record-start            # Start recording (alias)" << std::endl;
     std::cout << "  " << program_name << " record-stop ./videos    # Stop recording and save (alias)" << std::endl;
     std::cout << "  " << program_name << " shutdown                # Power off camera" << std::endl;
