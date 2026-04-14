@@ -173,21 +173,56 @@ public:
             return false;
         }
 
-        std::cout << "Setting photo mode..." << std::endl;
-        bool ret = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
-        if (!ret) {
-            std::cerr << "Warning: Failed to set photo mode, continuing anyway..." << std::endl;
+        constexpr int kPhotoModeAttempts = 3;
+        bool mode_set = false;
+        for (int attempt = 1; attempt <= kPhotoModeAttempts; ++attempt) {
+            std::cout << "Setting photo mode (attempt " << attempt << "/" << kPhotoModeAttempts << ")..." << std::endl;
+            mode_set = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
+            if (mode_set) {
+                break;
+            }
+            std::cerr << "Warning: Failed to set photo mode on attempt " << attempt << "." << std::endl;
+            if (attempt < kPhotoModeAttempts) {
+                std::cout << "Retrying photo mode setup after short delay..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
         }
 
-        // X5 needs time to switch from video to photo mode before TakePhoto
-        std::cout << "Waiting for camera to switch to photo mode..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::seconds(3));
+        if (!mode_set) {
+            std::cerr << "Error: Unable to switch camera to single photo mode." << std::endl;
+            std::cerr << "Hint: Ensure the camera is idle (not recording) and try again." << std::endl;
+            return false;
+        }
 
-        std::cout << "Taking photo..." << std::endl;
+        constexpr int kReadyPollAttempts = 10;
+        bool camera_busy = false;
+        for (int poll = 1; poll <= kReadyPollAttempts; ++poll) {
+            camera_busy = camera_->CaptureCurrentStatus();
+            if (!camera_busy) {
+                break;
+            }
+            std::cout << "Camera is busy (" << poll << "/" << kReadyPollAttempts
+                      << "); waiting before capture..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (camera_busy) {
+            std::cerr << "Error: Camera remained busy after waiting for photo readiness." << std::endl;
+            std::cerr << "Hint: Stop any active capture on the camera and retry." << std::endl;
+            return false;
+        }
+
+        // X5 may need extra settling time after mode transition before TakePhoto.
+        std::cout << "Photo mode ready. Waiting briefly before capture..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+
+        std::cout << "Taking photo... (this may take up to the SDK timeout)" << std::endl;
         const auto url = camera_->TakePhoto();
+        std::cout << "Capture command returned from SDK." << std::endl;
         
         if (url.Empty() || !url.IsSingleOrigin()) {
-            std::cerr << "Error: Failed to take photo." << std::endl;
+            std::cerr << "Error: Failed to take photo (empty or invalid media URL)." << std::endl;
+            std::cerr << "Hint: If this repeats on X5, wait for camera to become idle and retry." << std::endl;
             return false;
         }
 
