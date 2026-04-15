@@ -251,37 +251,13 @@ public:
         }
 
         // #region agent log
-        debugLog("H6", "takePhoto:SetVideoSubMode_before", "Resetting video pipeline before photo mode switch");
+        debugLog("H8", "takePhoto:SetPhotoSubMode_before", "Setting photo mode in photo session");
         // #endregion
-        std::cout << "Resetting camera mode via video sub-mode..." << std::endl;
-        bool video_reset = camera_->SetVideoSubMode(ins_camera::SubVideoMode::VIDEO_NORMAL);
+        std::cout << "Setting photo mode..." << std::endl;
+        bool mode_set = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
         // #region agent log
-        debugLog("H6", "takePhoto:SetVideoSubMode_after", "SetVideoSubMode returned", "result=" + std::to_string(video_reset));
+        debugLog("H8", "takePhoto:SetPhotoSubMode_after", "SetPhotoSubMode returned", "result=" + std::to_string(mode_set));
         // #endregion
-        if (!video_reset) {
-            std::cerr << "Warning: Video mode reset failed, proceeding anyway." << std::endl;
-        }
-
-        constexpr int kPhotoModeAttempts = 3;
-        bool mode_set = false;
-        for (int attempt = 1; attempt <= kPhotoModeAttempts; ++attempt) {
-            std::cout << "Setting photo mode (attempt " << attempt << "/" << kPhotoModeAttempts << ")..." << std::endl;
-            // #region agent log
-            debugLog("H6", "takePhoto:SetPhotoSubMode_before", "About to call SetPhotoSubMode", "attempt=" + std::to_string(attempt));
-            // #endregion
-            mode_set = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
-            // #region agent log
-            debugLog("H6", "takePhoto:SetPhotoSubMode_after", "SetPhotoSubMode returned", "result=" + std::to_string(mode_set));
-            // #endregion
-            if (mode_set) {
-                break;
-            }
-            std::cerr << "Warning: Failed to set photo mode on attempt " << attempt << "." << std::endl;
-            if (attempt < kPhotoModeAttempts) {
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-            }
-        }
-
         if (!mode_set) {
             std::cerr << "Error: Unable to switch camera to single photo mode." << std::endl;
             return false;
@@ -316,17 +292,7 @@ public:
                       << " failed (empty or invalid media URL)." << std::endl;
             if (attempt < kTakePhotoAttempts) {
                 std::cout << "Re-applying photo mode before retry..." << std::endl;
-                // #region agent log
-                debugLog("H7", "takePhoto:retry_before", "Re-applying modes before retry", "attempt=" + std::to_string(attempt));
-                // #endregion
-                camera_->SetVideoSubMode(ins_camera::SubVideoMode::VIDEO_NORMAL);
-                bool reapply = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
-                // #region agent log
-                debugLog("H7", "takePhoto:retry_after", "Re-apply returned", "result=" + std::to_string(reapply));
-                // #endregion
-                if (!reapply) {
-                    std::cerr << "Warning: Failed to re-apply photo mode before retry." << std::endl;
-                }
+                camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
                 const int backoff_seconds = attempt * 2;
                 std::cout << "Waiting " << backoff_seconds
                           << "s before retrying photo capture..." << std::endl;
@@ -490,11 +456,81 @@ public:
 
             if (download_success) {
                 std::cout << "Video successfully downloaded to: " << full_path << std::endl;
-                return true;
             } else {
                 std::cerr << "Error: Failed to download video." << std::endl;
                 std::cerr << "Video URL on camera: " << video_url << std::endl;
                 return false;
+            }
+        }
+
+        return true;
+    }
+
+    bool stopRecordingAndPhoto(const std::string& video_dir, const std::string& photo_dir) {
+        if (!stopRecording(video_dir)) {
+            return false;
+        }
+
+        // #region agent log
+        debugLog("H9", "stopRecAndPhoto:SetPhotoSubMode_before", "Setting photo mode in same session as stop");
+        // #endregion
+        std::cout << "Switching to photo mode (same session as stop)..." << std::endl;
+        bool mode_set = camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE);
+        // #region agent log
+        debugLog("H9", "stopRecAndPhoto:SetPhotoSubMode_after", "SetPhotoSubMode returned", "result=" + std::to_string(mode_set));
+        // #endregion
+        if (!mode_set) {
+            std::cerr << "Error: Failed to switch to photo mode." << std::endl;
+            return false;
+        }
+
+        // #region agent log
+        debugLog("H9", "stopRecAndPhoto:TakePhoto_before", "About to call TakePhoto in same session");
+        // #endregion
+        std::cout << "Taking photo (same session as recording stop)..." << std::endl;
+        const auto url = camera_->TakePhoto();
+        // #region agent log
+        debugLog("H9", "stopRecAndPhoto:TakePhoto_after", "TakePhoto returned",
+                 "empty=" + std::to_string(url.Empty()) + ",singleOrigin=" + std::to_string(url.IsSingleOrigin()));
+        // #endregion
+
+        if (url.Empty() || !url.IsSingleOrigin()) {
+            std::cerr << "Error: TakePhoto failed in same session." << std::endl;
+            return false;
+        }
+
+        const std::string photo_url = url.GetSingleOrigin();
+        std::cout << "Photo captured! URL: " << photo_url << std::endl;
+
+        if (!photo_dir.empty()) {
+            std::string save_path = photo_dir;
+            if (save_path.back() != '/' && save_path.back() != '\\') {
+                save_path += "/";
+            }
+            if (!fileExists(save_path)) {
+                std::cerr << "Warning: Photo save directory does not exist: " << save_path << std::endl;
+                return true;
+            }
+            std::string file_name = getFileName(photo_url);
+            if (file_name.empty()) {
+                file_name = "photo_" + getCurrentTime() + ".jpg";
+            }
+            std::string full_path = save_path + file_name;
+            std::cout << "Downloading photo to: " << full_path << std::endl;
+            int64_t last_progress = -1;
+            bool download_success = camera_->DownloadCameraFile(photo_url, full_path,
+                [&](int64_t current, int64_t total_size) {
+                    int64_t progress = total_size > 0 ? (current * 100 / total_size) : 0;
+                    if (progress != last_progress) {
+                        std::cout << "\rDownload progress: " << progress << "%" << std::flush;
+                        last_progress = progress;
+                    }
+                });
+            std::cout << std::endl;
+            if (download_success) {
+                std::cout << "Photo successfully downloaded to: " << full_path << std::endl;
+            } else {
+                std::cerr << "Error: Failed to download photo." << std::endl;
             }
         }
 
@@ -639,6 +675,13 @@ int main(int argc, char* argv[]) {
     else if (command == "record-stop") {
         std::string save_dir = (argc > 2) ? argv[2] : "./";
         bool success = controller.stopRecording(save_dir);
+        controller.disconnect();
+        return success ? 0 : 1;
+    }
+    else if (command == "record-stop-photo") {
+        std::string video_dir = (argc > 2) ? argv[2] : "./";
+        std::string photo_dir = (argc > 3) ? argv[3] : video_dir;
+        bool success = controller.stopRecordingAndPhoto(video_dir, photo_dir);
         controller.disconnect();
         return success ? 0 : 1;
     }
