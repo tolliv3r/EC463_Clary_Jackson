@@ -1,4 +1,4 @@
-# Insta360 Camera Control for Raspberry Pi Zero 2 W
+# Insta360 Camera Control for Raspberry Pi
 
 This application provides basic control of Insta360 cameras from a Raspberry Pi Zero 2 W, including:
 - Taking photos
@@ -9,8 +9,8 @@ This application provides basic control of Insta360 cameras from a Raspberry Pi 
 ## Prerequisites
 
 ### Hardware
-- Raspberry Pi Zero 2 W (or compatible Raspberry Pi)
-- Insta360 camera (X3, X4, X5, or compatible model)
+- Raspberry Pi
+- Insta360 camera (X4, X5, or compatible model)
 - USB cable or WiFi connection to camera
 
 ### Software
@@ -89,7 +89,7 @@ In interactive mode, you can run multiple commands:
 ./camera_control photo
 
 # Take photo and save to specific directory
-./camera_control photo /home/pi/photos
+./camera_control photo /example/folder/
 
 # Check battery before taking photos
 ./camera_control battery
@@ -111,32 +111,14 @@ In interactive mode, you can run multiple commands:
 2. Ensure camera is powered on
 3. Run the application
 
-### WiFi Connection
+### WiFi Connection (WIP)
 1. Put camera in WiFi mode
 2. Connect Raspberry Pi to camera's WiFi network
 3. Run the application
 
 The application will automatically discover cameras connected via USB or WiFi.
 
-## Troubleshooting
-
-### "No camera found"
-- Ensure camera is powered on
-- Check USB connection (if using USB)
-- Check WiFi connection (if using WiFi)
-- Try running with `sudo` (may need USB permissions)
-
-### "Failed to open camera"
-- Camera may be in use by another application
-- Try disconnecting and reconnecting
-- Check camera battery level
-
-### Library not found
-- Ensure `LD_LIBRARY_PATH` is set correctly
-- Check that `libCameraSDK.so` exists in the lib directory
-- Try installing the library system-wide (see Installation)
-
-## Installation (Optional)
+## Installation (optional)
 
 To install system-wide:
 ```bash
@@ -161,10 +143,30 @@ camera_control photo
 
 ## Notes
 
-- **Power On**: The SDK does not provide a software "power on" function. The camera must be manually powered on or connected via USB/WiFi.
-- **Power Off**: The `shutdown` command will power off the camera.
-- **Photo Download**: Photos are automatically downloaded after capture if a save directory is specified.
-- **Connection**: The camera must be powered on and connected (USB or WiFi) before running commands.
+enable photo timelapse script:
+```
+sudo systemctl enable --now polar-listener.service
+```
+
+disable:
+```
+sudo systemctl disable --now polar-listener.service
+systemctl status polar-listener.service
+```
+
+if looping photos or similar issues persist:
+```
+ps aux | grep -E 'polar_listener|camera_control' | grep -v grep
+```
+
+other similar useful commands:
+```
+sudo systemctl start  polar-listener.service    # start once, don't enable at boot
+sudo systemctl stop   polar-listener.service    # stop without un-disabling
+sudo systemctl enable polar-listener.service    # enable at boot without starting now
+sudo journalctl -u polar-listener.service -f    # follow live logs
+```
+
 
 ## License
 
