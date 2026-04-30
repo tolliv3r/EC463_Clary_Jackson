@@ -7,6 +7,7 @@
 #include <camera/device_discovery.h>
 #include <camera/photography_settings.h>
 
+
 #ifdef _WIN32
 #include <io.h>
 #include <sys/stat.h>
@@ -123,14 +124,24 @@ public:
                   << " (SN: " << selected_device.serial_number << ")..." << std::endl;
 
         camera_ = std::make_shared<ins_camera::Camera>(selected_device.info);
-        
+
         if (!camera_->Open()) {
             std::cerr << "Error: Failed to open camera connection." << std::endl;
             discovery.FreeDeviceDescriptors(device_list);
             return false;
         }
 
-        // sync time to camera
+        is_connected_ = true;
+
+        std::cout << "Setting capture mode to standard photo (PHOTO_SINGLE)..." << std::endl;
+        if (!camera_->SetPhotoSubMode(ins_camera::SubPhotoMode::PHOTO_SINGLE)) {
+            std::cerr << "Error: Failed to set capture mode to PHOTO_SINGLE; "
+                         "aborting connection before any preview/recording runs." << std::endl;
+            discovery.FreeDeviceDescriptors(device_list);
+            return false;
+        }
+        std::cout << "Capture mode set to standard photo (PHOTO_SINGLE)." << std::endl;
+
         time_t now = time(nullptr);
         std::tm tm{};
 #ifdef WIN32
@@ -142,9 +153,8 @@ public:
 #endif
         camera_->SyncLocalTimeToCamera(time_seconds);
 
-        is_connected_ = true;
         std::cout << "Successfully connected to camera!" << std::endl;
-        
+
         discovery.FreeDeviceDescriptors(device_list);
         return true;
     }
@@ -177,8 +187,8 @@ public:
         }
 
         std::cout << "Taking photo..." << std::endl;
-        const auto url = camera_->TakePhoto();
-        
+        ins_camera::MediaUrl url = camera_->TakePhoto();
+
         if (url.Empty() || !url.IsSingleOrigin()) {
             std::cerr << "Error: Failed to take photo." << std::endl;
             return false;
@@ -443,15 +453,6 @@ public:
             std::cerr << "Warning: Failed to set video mode, continuing anyway..." << std::endl;
         }
 
-        // set video capture parameters (not sure yet exactly what to set the parameters to)
-        // ins_camera::RecordParams record_params;
-        // record_params.resolution = ins_camera::VideoResolution::RES_3840_3840P30;
-        // record_params.bitrate = 1024 * 1024 * 10; // 10 Mbps default
-        // ret = camera_->SetVideoCaptureParams(record_params, ins_camera::CameraFunctionMode::FUNCTION_MODE_NORMAL_VIDEO);
-        // if (!ret) {
-        //     std::cerr << "Warning: Failed to set video capture params, continuing anyway..." << std::endl;
-        // }
-
         std::cout << "Starting recording..." << std::endl;
         ret = camera_->StartRecording();
         
@@ -479,7 +480,7 @@ public:
 
         std::cout << "Stopping recording..." << std::endl;
         const auto url = camera_->StopRecording();
-        
+
         if (url.Empty()) {
             std::cerr << "Error: Failed to stop recording or no video was recorded." << std::endl;
             return false;
@@ -688,7 +689,7 @@ public:
                     }
                 }
             }
-            
+
             return all_success;
         } else {
             // display video URL(s) if no save directory provided
