@@ -78,3 +78,6 @@ dkms.conf
 
 # Photo Directory
 /pi_images/*
+
+# Claude Code
+CLAUDE.md
