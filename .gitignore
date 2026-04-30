@@ -75,3 +75,6 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+# Photo Directory
+/pi_images/*
